@@ -1,5 +1,5 @@
 [tool.poetry]
-name = "mandelbrodt"
+name = "mandelbrot"
 version = "0.1.0"
 description = ""
 authors = ["Armaan Abraham <armaanabraham@g.ucla.edu>"]
