@@ -1,0 +1,20 @@
+[tool.poetry]
+name = "mandelbrodt"
+version = "0.1.0"
+description = ""
+authors = ["Armaan Abraham <armaanabraham@g.ucla.edu>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.12"
+numpy = "^2.1.0"
+torch = "^2.4.0"
+matplotlib = "^3.9.2"
+
+
+[tool.poetry.group.dev.dependencies]
+ipykernel = "^6.29.5"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
