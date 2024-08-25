@@ -1,2 +1,2 @@
-# mandelbrodt
+# mandelbrot
 Learning fractals
