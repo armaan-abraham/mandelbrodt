@@ -1,4 +1,5 @@
-# mandelbrot
+# Mandelbrot
+
 Learning fractals
 
 The idea here is to learn to what degree whether neural networks can learn the underlying rules of fractals, rather than just approximating their outline. Because some of these patterns are infinitely self-similar, we would expect a successful model to infinitely predict correctly.
