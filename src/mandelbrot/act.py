@@ -1,8 +1,6 @@
 import torch
 import torch.nn as nn
 
-torch.autograd.set_detect_anomaly(True)
-
 
 class LSTMGate(nn.Module):
     def __init__(self, input_size, hidden_size, activation=torch.sigmoid):
@@ -22,6 +20,9 @@ class ACT(nn.Module):
         hidden_size=1024,
         output_size=1,
         output_module_size=128,
+        output_module_hidden_layers=2,
+        halt_gate_size=128,
+        halt_gate_hidden_layers=1,
         epsilon=1e-3,
         initial_state=None,
         max_iter=1000,
@@ -34,6 +35,8 @@ class ACT(nn.Module):
         self.initial_state = initial_state
         self.max_iter = max_iter
         self.adaptive_time = adaptive_time
+        assert output_module_hidden_layers >= 1
+        assert halt_gate_hidden_layers >= 1
 
         # LSTM gates
         self.input_gate = LSTMGate(input_size, hidden_size)
@@ -42,12 +45,25 @@ class ACT(nn.Module):
         self.output_gate = LSTMGate(input_size, hidden_size)
 
         # Halt gate
-        self.halt_gate = nn.Sequential(nn.Linear(hidden_size, 1), nn.Sigmoid())
+        self.halt_gate = nn.Sequential(
+            nn.Linear(hidden_size, halt_gate_size),
+            nn.ReLU(),
+            *[
+                nn.Linear(halt_gate_size, halt_gate_size)
+                for _ in range(halt_gate_hidden_layers - 1)
+            ],
+            nn.Linear(halt_gate_size, 1),
+            nn.Sigmoid(),
+        )
 
         # Output module
         self.state_to_output = nn.Sequential(
             nn.Linear(hidden_size, output_module_size),
             nn.ReLU(),
+            *[
+                nn.Linear(output_module_size, output_module_size)
+                for _ in range(output_module_hidden_layers - 1)
+            ],
             nn.Linear(output_module_size, output_size),
             nn.Sigmoid(),
         )
@@ -60,8 +76,10 @@ class ACT(nn.Module):
             self.output_gate(x, state),
         )
 
-    def update_last_halt_prob(self, halt_probs, p_sum, finished_mask, active_mask):
-        halt_probs[-1][1][finished_mask[active_mask]] += 1 - p_sum[finished_mask & active_mask].squeeze(1)
+    def update_last_halt_prob(self, halt_probs_list, p_sum, finished_mask, active_mask):
+        halt_probs_list[-1][finished_mask & active_mask] += 1 - p_sum[
+            finished_mask & active_mask
+        ].squeeze(1)
         p_sum_copy = p_sum.clone()
         p_sum_copy[finished_mask & active_mask] = 1
         return p_sum_copy
@@ -71,8 +89,9 @@ class ACT(nn.Module):
         batch_size = x.shape[0]
 
         p_sum = torch.zeros(batch_size, 1, device=x.device, dtype=torch.float32)
-        outputs = []
-        halt_probs = []
+        outputs_list = []
+        halt_probs_list = []
+        active_masks_list = []
 
         if self.initial_state is None:
             state = torch.zeros(batch_size, self.hidden_size, device=x.device)
@@ -80,78 +99,71 @@ class ACT(nn.Module):
         else:
             state, cell = self.initial_state
 
-        active_mask = torch.ones(batch_size, 1, device=x.device, dtype=torch.bool)
-        active_mask_squeezed = active_mask.squeeze(1)
+        active_mask = torch.ones(batch_size, device=x.device, dtype=torch.bool)
 
         iter = 0
 
         while active_mask.any() and (iter < self.max_iter or self.max_iter is None):
             input_g, forget_g, cell_g, output_g = self.compute_gates(
-                x[active_mask_squeezed], state[active_mask_squeezed]
+                x[active_mask], state[active_mask]
             )
 
             new_cell = cell.clone()
-            new_cell[active_mask_squeezed] = (
-                forget_g * cell[active_mask_squeezed] + input_g * cell_g
-            )
+            new_cell[active_mask] = forget_g * cell[active_mask] + input_g * cell_g
             cell = new_cell
 
             new_state = state.clone()
-            new_state[active_mask_squeezed] = output_g * torch.tanh(
-                cell[active_mask_squeezed]
-            )
+            new_state[active_mask] = output_g * torch.tanh(cell[active_mask])
             state = new_state
 
-            output = self.state_to_output(state[active_mask_squeezed])
-            outputs.append((active_mask_squeezed.clone(), output))
+            output = self.state_to_output(state[active_mask])
+            outputs_full = torch.zeros(batch_size, self.output_size, device=x.device)
+            outputs_full[active_mask] = output
+            outputs_list.append(outputs_full)
 
-            halt_prob = self.halt_gate(state[active_mask_squeezed])
+            halt_prob = self.halt_gate(state[active_mask])
+
+            halt_probs_full = torch.zeros(batch_size, device=x.device)
+            halt_probs_full[active_mask] = halt_prob.squeeze(1)
+            halt_probs_list.append(halt_probs_full)
+
             p_sum_new = p_sum.clone()
-            p_sum_new[active_mask_squeezed] += halt_prob
+            p_sum_new[active_mask] += halt_prob
             p_sum = p_sum_new
 
-            halt_probs.append((active_mask_squeezed.clone(), halt_prob.squeeze(1)))
+            active_masks_list.append(active_mask)
 
             if self.adaptive_time:
-                finished = p_sum >= (1 - self.epsilon)
+                finished = (p_sum >= (1 - self.epsilon)).squeeze(1)
 
                 # Update halt probabilities for finished sequences
-                if (finished.squeeze(1) & active_mask_squeezed).any():
+                if (finished & active_mask).any():
                     p_sum = self.update_last_halt_prob(
-                        halt_probs, p_sum, finished.squeeze(1), active_mask_squeezed
+                        halt_probs_list, p_sum, finished, active_mask
                     )
 
                 # Update active_mask
                 new_active_mask = active_mask.clone()
                 new_active_mask[finished] = False
                 active_mask = new_active_mask
-                active_mask_squeezed = active_mask.squeeze(1)
 
             iter += 1
 
         if self.max_iter is not None and self.adaptive_time and iter >= self.max_iter:
             # update halt_probs for the remaining active elements
-            # TODO: check this
             p_sum = self.update_last_halt_prob(
-                halt_probs, p_sum, active_mask_squeezed, active_mask_squeezed
+                halt_probs_list, p_sum, active_mask, active_mask
             )
-            active_mask = torch.zeros_like(active_mask)
 
-        # Aggregate outputs and halt_probs
-        outputs_tensor = torch.zeros(
-            batch_size, iter, self.output_size, device=x.device
-        )
-        halt_probs_tensor = torch.zeros(batch_size, iter, device=x.device)
+        # Stack outputs and halt_probs
+        outputs_tensor = torch.stack(outputs_list, dim=1)
+        halt_probs_tensor = torch.stack(halt_probs_list, dim=1)
 
         iter_taken = torch.sum(
-            torch.stack([active_idx for active_idx, _ in outputs]), dim=0
-        )
+            torch.stack([active_mask for active_mask in active_masks_list]), dim=0
+        ).to(torch.int32)
 
-        for iter, (active_idx, out) in enumerate(outputs):
-            outputs_tensor[active_idx, iter] = out
-
-        for iter, (active_idx, h_prob) in enumerate(halt_probs):
-            halt_probs_tensor[active_idx, iter] = h_prob
+        self.mean_iter_taken = iter_taken.float().mean()
 
         if self.adaptive_time:
             with torch.no_grad():
@@ -171,13 +183,3 @@ class ACT(nn.Module):
             self.remainder = torch.ones(batch_size, device=x.device)
 
         return final_output
-
-
-# Example usage:
-if __name__ == "__main__":
-    model = ACT()
-    x = torch.randn(5, 2)
-    output, iterations, last_halt_prob = model(x)
-    print("Output:", output)
-    print("Iterations:", iterations)
-    print("Last Halt Probabilities:", last_halt_prob)
