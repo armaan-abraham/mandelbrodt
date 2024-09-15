@@ -1,29 +1,28 @@
+import torch
+import matplotlib.pyplot as plt
+from matplotlib.animation import FuncAnimation, PillowWriter
+from typing import List
+import numpy as np
+from pathlib import Path
+
+from mandelbrot.koch import koch_curve, plot_koch_curve, Y_BELOW, Y_ABOVE
 
 
-def generate_animation(data_file):
-    data = torch.load(data_file)
-    predictions = data["predictions"]
-    generate_plot(
-        predictions,
-        constants.ORDER,
-        constants.SIZE,
-        save_interval=constants.SAVE_INTERVAL,
-        fps=constants.FPS,
-    )
-    print("Animation complete!")
-
-def generate_plot(
-    predictions: List[np.ndarray],
+def generate_animation(
+    data_file: Path,
     order: int,
     size: float,
+    save_interval: int,
+    fps: int,
+    gif_file: Path,
     interval: int = 200,
-    save_interval: int = 5,
-    fps: int = 10,
 ):
+    data = torch.load(data_file)
+    predictions = data["predictions"]
+
     fig, ax = plt.subplots(figsize=(10, 10))
     ax.set_title("Model Predictions During Training")
 
-    curve = koch_curve(order, size)
     x_min, x_max = 0, size
     y_min, y_max = -size * Y_BELOW, size * Y_ABOVE
     plot_koch_curve(order, size, ax=ax)
@@ -50,6 +49,6 @@ def generate_plot(
     )
 
     writer = PillowWriter(fps=fps)
-    anim.save(GIF_FILE, writer=writer)
+    anim.save(gif_file, writer=writer)
     plt.close(fig)
-    print(f"Animation saved as '{GIF_FILE}'")
+    print(f"Animation saved as '{gif_file}'")

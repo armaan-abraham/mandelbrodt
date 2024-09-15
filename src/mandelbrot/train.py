@@ -8,7 +8,6 @@ import sys
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-from matplotlib.animation import FuncAnimation, PillowWriter
 from tqdm import tqdm
 from torch.utils.data import TensorDataset, DataLoader
 from torch.profiler import profile, record_function, ProfilerActivity
@@ -22,9 +21,9 @@ from mandelbrot.koch import (
     sample_labeled_points,
 )
 from mandelbrot.act import ACT
+from mandelbrot.plot import generate_animation
 
-# TODO: add ACT and ensure that regularization on time
-
+# Constants
 THIS_DIR = Path(__file__).parent
 RESULTS_DIR = THIS_DIR / "results"
 RESULTS_DIR.mkdir(exist_ok=True)
@@ -54,7 +53,6 @@ class Constants:
     RUN_ID = "act_small"
 
 
-# Replace individual constants with Constants class
 constants = Constants()
 
 RUN_FOLDER = RESULTS_DIR / constants.RUN_ID
@@ -81,14 +79,20 @@ def create_model() -> torch.nn.Module:
 
 
 def compute_loss(
-    model: torch.nn.Module, batch_X: torch.Tensor, batch_y: torch.Tensor, include_regularization: bool = True
+    model: torch.nn.Module,
+    batch_X: torch.Tensor,
+    batch_y: torch.Tensor,
+    include_regularization: bool = True,
 ) -> torch.Tensor:
     outputs = model(batch_X)
-    bce_loss = torch.nn.BCELoss(reduction='mean')(outputs, batch_y.unsqueeze(1).float())
+    bce_loss = torch.nn.BCELoss(reduction="mean")(outputs, batch_y.unsqueeze(1).float())
     if include_regularization:
-        return bce_loss + constants.TAU * (
-            torch.sum(model.iter_taken) + torch.sum(model.remainder)
-        ) / batch_X.shape[0]
+        return (
+            bce_loss
+            + constants.TAU
+            * (torch.sum(model.iter_taken) + torch.sum(model.remainder))
+            / batch_X.shape[0]
+        )
     return bce_loss
 
 
@@ -103,7 +107,9 @@ def train_epoch(model, dataloader, optimizer, device):
         loss.backward()
         optimizer.step()
         with torch.no_grad():
-            total_loss += compute_loss(model, batch_X, batch_y, include_regularization=False).item()
+            total_loss += compute_loss(
+                model, batch_X, batch_y, include_regularization=False
+            ).item()
         total_batches += 1
     return total_loss / total_batches
 
@@ -137,17 +143,16 @@ def train_model(
     progress_bar = tqdm(range(n_epochs), desc="Training")
     for epoch in progress_bar:
         avg_loss = train_epoch(model, dataloader, optimizer, device)
-        
-        progress_bar.set_postfix(μ_iter=f"{model.mean_iter_taken:.2f}", loss=f"{avg_loss:.4f}")
+
+        progress_bar.set_postfix(
+            μ_iter=f"{model.mean_iter_taken:.2f}", loss=f"{avg_loss:.4f}"
+        )
 
         if epoch % save_interval == 0 or epoch == n_epochs - 1:
             model_states.append(copy.deepcopy(model.state_dict()))
             predictions.append(save_state(model, grid, device))
 
     return model_states, predictions
-
-
-
 
 
 def train_and_save_model():
@@ -206,8 +211,6 @@ def train_and_save_model():
     print(f"Constants saved to '{CONSTANTS_FILE}'")
 
 
-
-
 def main():
     parser = argparse.ArgumentParser(
         description="Koch curve neural network training and visualization"
@@ -224,7 +227,18 @@ def main():
 
     args = parser.parse_args()
 
-    actions = {"train": train_and_save_model, "plot": generate_animation}
+    actions = {
+        "train": train_and_save_model,
+        "plot": lambda: generate_animation(
+            MODEL_DATA_FILE,
+            constants.ORDER,
+            constants.SIZE,
+            constants.SAVE_INTERVAL,
+            constants.FPS,
+            GIF_FILE,
+            interval=200,  # Add this line
+        ),
+    }
 
     for arg, action in actions.items():
         if getattr(args, arg):
