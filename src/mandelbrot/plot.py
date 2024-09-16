@@ -2,14 +2,14 @@ import torch
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation, PillowWriter
 from typing import List
-import numpy as np
 from pathlib import Path
 
-from mandelbrot.koch import koch_curve, plot_koch_curve, Y_BELOW, Y_ABOVE
+from mandelbrot.koch import plot_koch_curve, Y_BELOW, Y_ABOVE
 
 
 def generate_animation(
-    data_file: Path,
+    model_states_file: Path,
+    predictions_file: Path,
     order: int,
     size: float,
     save_interval: int,
@@ -17,8 +17,8 @@ def generate_animation(
     gif_file: Path,
     interval: int = 200,
 ):
-    data = torch.load(data_file)
-    predictions = data["predictions"]
+    model_states = torch.load(model_states_file)
+    predictions = torch.load(predictions_file)
 
     fig, ax = plt.subplots(figsize=(10, 10))
     ax.set_title("Model Predictions During Training")

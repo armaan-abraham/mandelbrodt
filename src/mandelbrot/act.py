@@ -13,6 +13,27 @@ class LSTMGate(nn.Module):
         return self.activation(self.input_weight(x) + self.hidden_weight(h))
 
 
+class HaltGate(nn.Module):
+    def __init__(self, hidden_size, halt_gate_size, halt_gate_hidden_layers):
+        super().__init__()
+        self.input_layer = nn.Sequential(
+            nn.Linear(hidden_size, halt_gate_size), nn.ReLU()
+        )
+        self.hidden_layers = nn.Sequential(
+            *[
+                nn.Sequential(nn.Linear(halt_gate_size, halt_gate_size), nn.ReLU())
+                for _ in range(halt_gate_hidden_layers - 1)
+            ],
+        )
+        self.output_mat = nn.Linear(halt_gate_size, 1)
+        self.output_bias = nn.Parameter(torch.full((1,), -0.5))
+
+    def forward(self, x):
+        return nn.Sigmoid()(
+            self.output_mat(self.hidden_layers(self.input_layer(x))) + self.output_bias
+        )
+
+
 class ACT(nn.Module):
     def __init__(
         self,
@@ -45,26 +66,19 @@ class ACT(nn.Module):
         self.output_gate = LSTMGate(input_size, hidden_size)
 
         # Halt gate
-        self.halt_gate = nn.Sequential(
-            nn.Linear(hidden_size, halt_gate_size),
-            nn.ReLU(),
-            *[
-                nn.Linear(halt_gate_size, halt_gate_size)
-                for _ in range(halt_gate_hidden_layers - 1)
-            ],
-            nn.Linear(halt_gate_size, 1),
-            nn.Sigmoid(),
-        )
+        self.halt_gate = HaltGate(hidden_size, halt_gate_size, halt_gate_hidden_layers)
 
         # Output module
         self.state_to_output = nn.Sequential(
             nn.Linear(hidden_size, output_module_size),
             nn.ReLU(),
             *[
-                nn.Linear(output_module_size, output_module_size)
+                nn.Sequential(
+                    nn.Linear(output_module_size, output_module_size), nn.ReLU()
+                )
                 for _ in range(output_module_hidden_layers - 1)
             ],
-            nn.Linear(output_module_size, output_size),
+            nn.Linear(output_module_size, output_size, bias=True),
             nn.Sigmoid(),
         )
 
@@ -101,9 +115,11 @@ class ACT(nn.Module):
 
         active_mask = torch.ones(batch_size, device=x.device, dtype=torch.bool)
 
-        iter = 0
+        step_count = 0
 
-        while active_mask.any() and (iter < self.max_iter or self.max_iter is None):
+        while active_mask.any() and (
+            step_count < self.max_iter or self.max_iter is None
+        ):
             input_g, forget_g, cell_g, output_g = self.compute_gates(
                 x[active_mask], state[active_mask]
             )
@@ -147,9 +163,13 @@ class ACT(nn.Module):
                 new_active_mask[finished] = False
                 active_mask = new_active_mask
 
-            iter += 1
+            step_count += 1
 
-        if self.max_iter is not None and self.adaptive_time and iter >= self.max_iter:
+        if (
+            self.max_iter is not None
+            and self.adaptive_time
+            and step_count >= self.max_iter
+        ):
             # update halt_probs for the remaining active elements
             p_sum = self.update_last_halt_prob(
                 halt_probs_list, p_sum, active_mask, active_mask

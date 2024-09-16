@@ -2,6 +2,7 @@ import numpy as np
 import torch
 import matplotlib.pyplot as plt
 from numpy.typing import NDArray
+from typing import List, Tuple
 
 # Constants
 Y_BELOW = 0.05
@@ -140,6 +141,28 @@ def sample_labeled_points(
     return points, labels
 
 
+def koch_curve_segments(order: int, size: float = 1) -> List[Tuple[np.ndarray, np.ndarray, int]]:
+    """Generate Koch curve segments with their recursion depths."""
+    def generate_segments(order: int, a: np.ndarray, b: np.ndarray, depth: int) -> List[Tuple[np.ndarray, np.ndarray, int]]:
+        if order == 0:
+            return [(a, b, depth)]
+        else:
+            t = b - a
+            c = a + t / 3
+            d = a + t * 2 / 3
+            e = a + np.dot(
+                t, np.array([[1 / 2, np.sqrt(3) / 6], [-np.sqrt(3) / 6, 1 / 2]])
+            )
+            segments = []
+            segments.extend(generate_segments(order - 1, a, c, depth + 1))
+            segments.extend(generate_segments(order - 1, c, e, depth + 1))
+            segments.extend(generate_segments(order - 1, e, d, depth + 1))
+            segments.extend(generate_segments(order - 1, d, b, depth + 1))
+            return segments
+
+    return generate_segments(order, np.array([0, 0]), np.array([size, 0]), 0)
+
+
 def plot_koch_curve(
     order: int,
     size: float = 1,
@@ -147,14 +170,25 @@ def plot_koch_curve(
     labels: NDArray[np.int64] = None,
     ax: plt.Axes = None,
     point_size: float = 0.1,
+    variable_line_depth: bool = False,
 ) -> None:
-    """Plot Koch curve and optionally scatter labeled points."""
-    curve = koch_curve(order, size)
-
+    """Plot Koch curve and optionally scatter labeled points.
+       If variable_line_depth is True, the darkness of the curve changes based on recursion depth.
+    """
     if ax is None:
-        _, ax = plt.subplots(figsize=(FIG_DIM, FIG_DIM * (Y_ABOVE + Y_BELOW)))
+        fig, ax = plt.subplots(figsize=(FIG_DIM, FIG_DIM * (Y_ABOVE + Y_BELOW)))
 
-    ax.plot(curve[:, 0], curve[:, 1], color="black", linewidth=0.25)
+    if variable_line_depth:
+        segments = koch_curve_segments(order, size)
+        max_depth = max(depth for _, _, depth in segments)
+        for a, b, depth in segments:
+            darkness = 1 - depth / max_depth  # 1 is darkest, 0 is lightest
+            color = str(darkness)  # Grayscale color
+            ax.plot([a[0], b[0]], [a[1], b[1]], color=color, linewidth=0.5)
+    else:
+        curve = koch_curve(order, size)
+        ax.plot(curve[:, 0], curve[:, 1], color="black", linewidth=0.5)
+
     ax.set_aspect("equal")
     ax.axis("off")
     ax.set_xlim(0, size)
@@ -185,7 +219,7 @@ def plot_koch_curve(
 
 
 if __name__ == "__main__":
-    polygon = complete_koch_polygon(koch_curve(order=5, size=1), Y_BELOW)
+    polygon = complete_koch_polygon(koch_curve(order=3, size=1), Y_BELOW)
     points, labels = sample_labeled_points(100000, polygon, 1)
-    plot_koch_curve(order=6, size=1, points=points, labels=labels, point_size=0.01)
-    plt.savefig("out.png", dpi=200, bbox_inches="tight", pad_inches=0)
+    plot_koch_curve(order=3, size=1, points=points, labels=labels, point_size=0.01, variable_line_depth=True)
+    plt.savefig("out.png", dpi=500, bbox_inches="tight", pad_inches=0)

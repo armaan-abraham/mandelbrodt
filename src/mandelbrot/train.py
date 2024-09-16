@@ -34,19 +34,21 @@ class Constants:
     ORDER = 5
     SIZE = 1
     N_POINTS = int(2e6)
-    BATCH_SIZE = int(1e4)
+    BATCH_SIZE = int(5e3)
+    GRID_BATCH_SIZE = int(5e4)
     N_EPOCHS = 50
-    N_SAVES = 50
-    SAVE_INTERVAL = N_EPOCHS // N_SAVES
+    # N_SAVES = 50
+    # SAVE_INTERVAL = N_EPOCHS // N_SAVES
+    SAVE_INTERVAL = 1
     GRID_DIM = 150
-    TAU = 0.001
+    TAU = 0.0001
     FPS = 4
-    MAX_ITER = 2
-    HIDDEN_SIZE = 300
+    MAX_ITER = 300
+    HIDDEN_SIZE = 400
     OUTPUT_SIZE = 1
     OUTPUT_MODULE_SIZE = 150
     OUTPUT_MODULE_HIDDEN_LAYERS = 2
-    HALT_GATE_SIZE = 150
+    HALT_GATE_SIZE = 250
     HALT_GATE_HIDDEN_LAYERS = 2
     EPSILON = 1e-3
     ADAPTIVE_TIME = True
@@ -58,7 +60,8 @@ constants = Constants()
 RUN_FOLDER = RESULTS_DIR / constants.RUN_ID
 RUN_FOLDER.mkdir(exist_ok=True)
 
-MODEL_DATA_FILE = RUN_FOLDER / f"model_data.pth"
+MODEL_STATES_FILE = RUN_FOLDER / f"model_states.pth"
+PREDICTIONS_FILE = RUN_FOLDER / f"predictions.pth"
 GIF_FILE = RUN_FOLDER / f"training.gif"
 CONSTANTS_FILE = RUN_FOLDER / f"constants.txt"
 
@@ -118,8 +121,8 @@ def save_state(model, grid, device):
     model.eval()
     with torch.no_grad():
         predictions = []
-        for i in range(0, grid.shape[0], constants.BATCH_SIZE):
-            batch = grid[i : i + constants.BATCH_SIZE].to(device)
+        for i in range(0, grid.shape[0], constants.GRID_BATCH_SIZE):
+            batch = grid[i : i + constants.GRID_BATCH_SIZE].to(device)
             pred_batch = model(batch).cpu().numpy()
             predictions.append(pred_batch)
         pred = np.concatenate(predictions).reshape(int(np.sqrt(grid.shape[0])), -1)
@@ -134,7 +137,7 @@ def train_model(
     grid: torch.Tensor,
     device: torch.device,
 ) -> Tuple[List[dict], List[np.ndarray]]:
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-2, amsgrad=True)
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3, amsgrad=True)
     model_states = []
     predictions = []
 
@@ -165,7 +168,7 @@ def train_and_save_model():
     print("Points sampled")
 
     dataset = TensorDataset(torch.FloatTensor(points), torch.FloatTensor(labels))
-    dataloader = DataLoader(dataset, batch_size=constants.BATCH_SIZE, shuffle=True)
+    dataloader = DataLoader(dataset, batch_size=constants.BATCH_SIZE, shuffle=True, num_workers=8, pin_memory=True, persistent_workers=True)
     print("Dataset created")
 
     x = np.linspace(0, constants.SIZE, constants.GRID_DIM)
@@ -174,7 +177,6 @@ def train_and_save_model():
     )
     xx, yy = np.meshgrid(x, y)
     grid = torch.FloatTensor(np.column_stack((xx.ravel(), yy.ravel())))
-
     model = create_model().to(device)
     print("Starting training...")
     model_states, predictions = train_model(
@@ -188,10 +190,12 @@ def train_and_save_model():
 
     sys.stdout.write("\rSaving final model data...   ")
     sys.stdout.flush()
-    torch.save(
-        {"model_states": model_states, "predictions": predictions},
-        MODEL_DATA_FILE,
-    )
+
+    # Save model states
+    torch.save(model_states, MODEL_STATES_FILE)
+
+    # Save predictions
+    torch.save(predictions, PREDICTIONS_FILE)
 
     # Save constants to a text file
     with open(CONSTANTS_FILE, "w") as f:
@@ -208,6 +212,8 @@ def train_and_save_model():
 
     sys.stdout.write("\rTraining complete and data saved!   \n")
     sys.stdout.flush()
+    print(f"Model states saved to '{MODEL_STATES_FILE}'")
+    print(f"Predictions saved to '{PREDICTIONS_FILE}'")
     print(f"Constants saved to '{CONSTANTS_FILE}'")
 
 
@@ -230,7 +236,8 @@ def main():
     actions = {
         "train": train_and_save_model,
         "plot": lambda: generate_animation(
-            MODEL_DATA_FILE,
+            MODEL_STATES_FILE,
+            PREDICTIONS_FILE,
             constants.ORDER,
             constants.SIZE,
             constants.SAVE_INTERVAL,
