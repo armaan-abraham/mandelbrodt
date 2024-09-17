@@ -1,27 +1,18 @@
-import argparse
 import copy
 from pathlib import Path
-from typing import List, Tuple
-import json
-import sys
+from typing import List
 
-import matplotlib.pyplot as plt
-import numpy as np
 import torch
-from tqdm import tqdm
 from torch.utils.data import TensorDataset, DataLoader
-from torch.profiler import profile, record_function, ProfilerActivity
+from tqdm import tqdm
+import json
 
 from mandelbrot.koch import (
     koch_curve,
-    plot_koch_curve,
-    Y_BELOW,
-    Y_ABOVE,
     complete_koch_polygon,
     sample_labeled_points,
 )
 from mandelbrot.act import ACT
-from mandelbrot.plot import generate_animation
 
 # Constants
 THIS_DIR = Path(__file__).parent
@@ -33,22 +24,18 @@ class Constants:
     INPUT_SIZE = 2
     ORDER = 5
     SIZE = 1
-    N_POINTS = int(2e6)
+    N_POINTS = int(1e6)
     BATCH_SIZE = int(5e3)
-    GRID_BATCH_SIZE = int(5e4)
-    N_EPOCHS = 50
-    # N_SAVES = 50
-    # SAVE_INTERVAL = N_EPOCHS // N_SAVES
-    SAVE_INTERVAL = 1
-    GRID_DIM = 150
-    TAU = 0.0001
+    N_EPOCHS = 100
+    SAVE_INTERVAL = 5
+    TAU = 0.001
     FPS = 4
     MAX_ITER = 300
-    HIDDEN_SIZE = 400
+    HIDDEN_SIZE = 200
     OUTPUT_SIZE = 1
-    OUTPUT_MODULE_SIZE = 150
+    OUTPUT_MODULE_SIZE = 50
     OUTPUT_MODULE_HIDDEN_LAYERS = 2
-    HALT_GATE_SIZE = 250
+    HALT_GATE_SIZE = 50
     HALT_GATE_HIDDEN_LAYERS = 2
     EPSILON = 1e-3
     ADAPTIVE_TIME = True
@@ -61,8 +48,6 @@ RUN_FOLDER = RESULTS_DIR / constants.RUN_ID
 RUN_FOLDER.mkdir(exist_ok=True)
 
 MODEL_STATES_FILE = RUN_FOLDER / f"model_states.pth"
-PREDICTIONS_FILE = RUN_FOLDER / f"predictions.pth"
-GIF_FILE = RUN_FOLDER / f"training.gif"
 CONSTANTS_FILE = RUN_FOLDER / f"constants.txt"
 
 
@@ -117,29 +102,15 @@ def train_epoch(model, dataloader, optimizer, device):
     return total_loss / total_batches
 
 
-def save_state(model, grid, device):
-    model.eval()
-    with torch.no_grad():
-        predictions = []
-        for i in range(0, grid.shape[0], constants.GRID_BATCH_SIZE):
-            batch = grid[i : i + constants.GRID_BATCH_SIZE].to(device)
-            pred_batch = model(batch).cpu().numpy()
-            predictions.append(pred_batch)
-        pred = np.concatenate(predictions).reshape(int(np.sqrt(grid.shape[0])), -1)
-    return pred
-
-
 def train_model(
     model: torch.nn.Module,
     dataloader: DataLoader,
     n_epochs: int,
     save_interval: int,
-    grid: torch.Tensor,
     device: torch.device,
-) -> Tuple[List[dict], List[np.ndarray]]:
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3, amsgrad=True)
+) -> List[dict]:
+    optimizer = torch.optim.Adam(model.parameters(), lr=2e-4, amsgrad=True)
     model_states = []
-    predictions = []
 
     print("Total parameters: ", sum(p.numel() for p in model.parameters()))
 
@@ -153,9 +124,8 @@ def train_model(
 
         if epoch % save_interval == 0 or epoch == n_epochs - 1:
             model_states.append(copy.deepcopy(model.state_dict()))
-            predictions.append(save_state(model, grid, device))
 
-    return model_states, predictions
+    return model_states
 
 
 def train_and_save_model():
@@ -163,39 +133,35 @@ def train_and_save_model():
     print(f"Using device: {device}")
 
     curve = koch_curve(constants.ORDER, constants.SIZE)
-    polygon = complete_koch_polygon(curve, Y_BELOW)
+    polygon = complete_koch_polygon(curve)
     points, labels = sample_labeled_points(constants.N_POINTS, polygon, constants.SIZE)
     print("Points sampled")
 
     dataset = TensorDataset(torch.FloatTensor(points), torch.FloatTensor(labels))
-    dataloader = DataLoader(dataset, batch_size=constants.BATCH_SIZE, shuffle=True, num_workers=8, pin_memory=True, persistent_workers=True)
+    dataloader = DataLoader(
+        dataset,
+        batch_size=constants.BATCH_SIZE,
+        shuffle=True,
+        num_workers=8,
+        pin_memory=True,
+        persistent_workers=True,
+    )
     print("Dataset created")
 
-    x = np.linspace(0, constants.SIZE, constants.GRID_DIM)
-    y = np.linspace(
-        -constants.SIZE * Y_BELOW, constants.SIZE * Y_ABOVE, constants.GRID_DIM
-    )
-    xx, yy = np.meshgrid(x, y)
-    grid = torch.FloatTensor(np.column_stack((xx.ravel(), yy.ravel())))
     model = create_model().to(device)
     print("Starting training...")
-    model_states, predictions = train_model(
+    model_states = train_model(
         model,
         dataloader,
         constants.N_EPOCHS,
         constants.SAVE_INTERVAL,
-        grid,
         device,
     )
 
-    sys.stdout.write("\rSaving final model data...   ")
-    sys.stdout.flush()
+    print("\rSaving final model data...")
 
     # Save model states
     torch.save(model_states, MODEL_STATES_FILE)
-
-    # Save predictions
-    torch.save(predictions, PREDICTIONS_FILE)
 
     # Save constants to a text file
     with open(CONSTANTS_FILE, "w") as f:
@@ -210,50 +176,10 @@ def train_and_save_model():
         print(content)
         f.write(content)
 
-    sys.stdout.write("\rTraining complete and data saved!   \n")
-    sys.stdout.flush()
+    print("\rTraining complete and data saved!   ")
     print(f"Model states saved to '{MODEL_STATES_FILE}'")
-    print(f"Predictions saved to '{PREDICTIONS_FILE}'")
     print(f"Constants saved to '{CONSTANTS_FILE}'")
 
 
-def main():
-    parser = argparse.ArgumentParser(
-        description="Koch curve neural network training and visualization"
-    )
-    parser.add_argument(
-        "-t", "--train", action="store_true", help="Train the model and save results"
-    )
-    parser.add_argument(
-        "-p",
-        "--plot",
-        action="store_true",
-        help="Generate animation from saved results",
-    )
-
-    args = parser.parse_args()
-
-    actions = {
-        "train": train_and_save_model,
-        "plot": lambda: generate_animation(
-            MODEL_STATES_FILE,
-            PREDICTIONS_FILE,
-            constants.ORDER,
-            constants.SIZE,
-            constants.SAVE_INTERVAL,
-            constants.FPS,
-            GIF_FILE,
-            interval=200,  # Add this line
-        ),
-    }
-
-    for arg, action in actions.items():
-        if getattr(args, arg):
-            action()
-            return
-
-    parser.print_help()
-
-
 if __name__ == "__main__":
-    main()
+    train_and_save_model()
